@@ -1,0 +1,91 @@
+model-training/data/
+
+##################################
+# DATASETS & LARGE FILES
+##################################
+data/
+dataset/
+datasets/
+model/data/
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.rar
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.tflite
+*.joblib
+
+##################################
+# TRAINING OUTPUTS
+##################################
+runs/
+logs/
+checkpoints/
+weights/
+experiments/
+wandb/
+mlruns/
+lightning_logs/
+outputs/
+results/
+
+##################################
+# NOTEBOOKS
+##################################
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+##################################
+# PYTHON
+##################################
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+##################################
+# ENVIRONMENTS
+##################################
+.env
+.env.*
+venv/
+env/
+.venv/
+conda/
+miniconda/
+anaconda/
+
+##################################
+# IDEs
+##################################
+.vscode/
+.idea/
+.spyderproject
+.spyproject
+
+##################################
+# OS
+##################################
+.DS_Store
+Thumbs.db
+desktop.ini
+
+##################################
+# Torch / Tensorflow cache
+##################################
+.cache/
+.torch/
+.keras/
