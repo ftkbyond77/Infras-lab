@@ -19,9 +19,9 @@ model/data/
 *.h5
 *.hdf5
 *.pt
-*.pth
+# *.pth
 *.ckpt
-*.onnx
+# *.onnx
 *.tflite
 *.joblib
 
