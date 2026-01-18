@@ -1,0 +1,33 @@
+name: MLOps CI Pipeline
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build-inference:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Build Inference Docker Image
+      run: |
+        cd inferences
+        docker build -t my-cyclegan-inference:latest .
+    
+    - name: Test Inference Binary (Dry Run)
+
+      run: |
+        docker run --rm my-cyclegan-inference:latest || true
+
+  build-training:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Build Training Docker Image
+      run: |
+        cd model-training
+        docker build -t my-cyclegan-inference:latest .

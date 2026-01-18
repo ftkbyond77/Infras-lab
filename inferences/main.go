@@ -17,13 +17,28 @@ import (
 	"golang.org/x/image/draw"
 )
 
-const (
-	modelPath    = "../model-path/cyclegan_horse2zebra.onnx"
-	inputImage   = "The-Horses-Personality.jpg"
-	outputImage  = "zebra_output.jpg"
-	compareImage = "compare.jpg" 
+// const (
+// 	modelPath    = "../model-path/cyclegan_horse2zebra.onnx"
+// 	inputImage   = "The-Horses-Personality.jpg"
+// 	outputImage  = "zebra_output.jpg"
+// 	compareImage = "compare.jpg"
+// 	imgSize      = 256
+// )
+
+var (
+	modelPath    = getEnv("MODEL_PATH", "../model-path/cyclegan_horse2zebra.onnx")
+	inputImage   = getEnv("INPUT_IMAGE", "The-Horses-Personality.jpg")
+	outputImage  = getEnv("OUTPUT_IMAGE", "zebra_output.jpg")
+	compareImage = getEnv("COMPARE_IMAGE", "compare.jpg")
 	imgSize      = 256
 )
+
+func getEnv(key, fallback string) string {
+	if value, exists := os.LookupEnv(key); exists {
+		return value
+	}
+	return fallback
+}
 
 func main() {
 	// 1. Initialize ONNX Runtime
@@ -95,7 +110,7 @@ func main() {
 
 	// 7. Create and Save Comparison Image (Side-by-Side)
 	log.Println("Creating comparison image...")
-	
+
 	// Create a new image twice as wide
 	comparisonRect := image.Rect(0, 0, imgSize*2, imgSize)
 	comparisonImg := image.NewRGBA(comparisonRect)

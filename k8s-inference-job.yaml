@@ -1,0 +1,40 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cyclegan-inference-job
+spec:
+  template:
+    spec:
+      containers:
+      - name: inference
+        image: my-cyclegan-inference:latest
+        imagePullPolicy: Never
+        env:
+
+        - name: MODEL_PATH
+          value: "/data/model/cyclegan_horse2zebra.onnx"
+        - name: INPUT_IMAGE
+          value: "/data/input/horse.jpg"
+        - name: OUTPUT_IMAGE
+          value: "/data/output/zebra.jpg"
+        volumeMounts:
+        - mountPath: /data/model
+          name: model-volume
+        - mountPath: /data/input
+          name: input-volume
+        - mountPath: /data/output
+          name: output-volume
+      restartPolicy: Never
+      volumes:
+      # Inproduction: S3 Buckets or PVCs
+      # Local: Minikube / Docker Desktop
+      - name: model-volume
+        hostPath:
+          path: /tmp/cyclegan/model
+      - name: input-volume
+        hostPath:
+          path: /tmp/cyclegan/input
+      - name: output-volume
+        hostPath:
+          path: /tmp/cyclegan/output
+  backoffLimit: 1
