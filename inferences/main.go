@@ -1,35 +1,37 @@
 package main
 
 import (
+	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
-	_ "image/jpeg"
 	"image/png"
-	_ "image/png"
 	"log"
 	"os"
 	"path/filepath"
 	"runtime"
+
+	_ "golang.org/x/image/webp"
 
 	"github.com/yalue/onnxruntime_go"
 	"golang.org/x/image/draw"
 )
 
 const (
-	modelPath   = "../model-path/cyclegan_horse2zebra.onnx"
-	inputImage  = "The-Horses-Personality.jpg"
-	outputImage = "zebra_output.jpg"
-	imgSize     = 256
+	modelPath    = "../model-path/cyclegan_horse2zebra.onnx"
+	inputImage   = "The-Horses-Personality.jpg"
+	outputImage  = "zebra_output.jpg"
+	compareImage = "compare.jpg" 
+	imgSize      = 256
 )
 
 func main() {
 	// 1. Initialize ONNX Runtime
 	var libName string
 	if runtime.GOOS == "windows" {
-		libName = "onnxruntime.dll" // For Windows
+		libName = "onnxruntime.dll"
 	} else {
-		libName = "libonnxruntime.so" // For Linux
+		libName = "libonnxruntime.so"
 	}
 
 	onnxruntime_go.SetSharedLibraryPath(libName)
@@ -43,8 +45,8 @@ func main() {
 	log.Println("Loading model...")
 	session, err := onnxruntime_go.NewDynamicAdvancedSession(
 		modelPath,
-		[]string{"input"},  // Matches Python input name
-		[]string{"output"}, // Matches Python output name
+		[]string{"input"},
+		[]string{"output"},
 		nil,
 	)
 	if err != nil {
@@ -54,12 +56,12 @@ func main() {
 
 	// 3. Prepare Input Data
 	log.Printf("Processing image: %s", inputImage)
-	inputTensorData, err := preprocessImage(inputImage, imgSize, imgSize)
+	// Modified to return the resized image object as well
+	inputTensorData, resizedInputImg, err := preprocessImage(inputImage, imgSize, imgSize)
 	if err != nil {
 		log.Fatalf("Preprocessing failed: %v", err)
 	}
 
-	// [FIX 1] Use Generic Instantiation [float32]
 	shape := onnxruntime_go.NewShape(1, 3, int64(imgSize), int64(imgSize))
 	inputTensor, err := onnxruntime_go.NewTensor[float32](shape, inputTensorData)
 	if err != nil {
@@ -69,50 +71,67 @@ func main() {
 
 	// 4. Run Inference
 	log.Println("Running inference...")
-
-	// [FIX 2] Create inputs and outputs slices
-	// We pass a slice of inputs and an empty slice for outputs (library will fill it)
 	inputs := []onnxruntime_go.Value{inputTensor}
-	outputs := make([]onnxruntime_go.Value, 1) // Reserve slot for 1 output
+	outputs := make([]onnxruntime_go.Value, 1)
 
-	// [FIX 3] Run accepts (inputs, outputs) and returns only error
 	err = session.Run(inputs, outputs)
 	if err != nil {
 		log.Fatalf("Inference failed: %v", err)
 	}
 
-	// 5. Get Output
-	// The output is now in outputs[0]. We must type assert it to the generic Tensor type.
+	// 5. Get Output Data
 	outputTensor := outputs[0].(*onnxruntime_go.Tensor[float32])
-	defer outputTensor.Destroy() // Don't forget to cleanup the library-allocated tensor
-
+	defer outputTensor.Destroy()
 	outputData := outputTensor.GetData()
 
-	// 6. Post-process and Save
-	err = postprocessAndSave(outputData, imgSize, imgSize, outputImage)
-	if err != nil {
-		log.Fatalf("Saving failed: %v", err)
+	// 6. Post-process (Convert Tensor -> Image)
+	outputImg := tensorToImage(outputData, imgSize, imgSize)
+
+	// Save the single output file
+	if err := saveImage(outputImg, outputImage); err != nil {
+		log.Fatalf("Saving output failed: %v", err)
+	}
+	log.Printf("Saved output to %s", outputImage)
+
+	// 7. Create and Save Comparison Image (Side-by-Side)
+	log.Println("Creating comparison image...")
+	
+	// Create a new image twice as wide
+	comparisonRect := image.Rect(0, 0, imgSize*2, imgSize)
+	comparisonImg := image.NewRGBA(comparisonRect)
+
+	// Draw Original Input on the Left
+	draw.Draw(comparisonImg, image.Rect(0, 0, imgSize, imgSize), resizedInputImg, image.Point{}, draw.Src)
+
+	// Draw Generated Output on the Right
+	draw.Draw(comparisonImg, image.Rect(imgSize, 0, imgSize*2, imgSize), outputImg, image.Point{}, draw.Src)
+
+	// Save the comparison file
+	if err := saveImage(comparisonImg, compareImage); err != nil {
+		log.Fatalf("Saving comparison failed: %v", err)
 	}
 
-	log.Printf("Success! Output saved to %s", outputImage)
+	log.Printf("Saved comparison to %s", compareImage)
 }
 
-// preprocessImage loads, resizes, and normalizes the image to [-1, 1]
-func preprocessImage(path string, width, height int) ([]float32, error) {
+// preprocessImage returns the tensor data AND the resized image object
+func preprocessImage(path string, width, height int) ([]float32, image.Image, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer file.Close()
 
 	img, _, err := image.Decode(file)
 	if err != nil {
-		return nil, err
+		return nil, nil, fmt.Errorf("decode error: %v", err)
 	}
 
+	// Resize using high-quality resampling
 	dst := image.NewRGBA(image.Rect(0, 0, width, height))
 	draw.CatmullRom.Scale(dst, dst.Rect, img, img.Bounds(), draw.Over, nil)
 
+	// Convert to Tensor (CHW format)
 	tensor := make([]float32, 3*width*height)
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
@@ -129,11 +148,11 @@ func preprocessImage(path string, width, height int) ([]float32, error) {
 			tensor[idx+(2*width*height)] = bNorm // B
 		}
 	}
-	return tensor, nil
+	return tensor, dst, nil
 }
 
-// postprocessAndSave denormalizes from [-1, 1] to [0, 255] and saves image
-func postprocessAndSave(data []float32, width, height int, filename string) error {
+// tensorToImage converts raw output data back to a Go Image
+func tensorToImage(data []float32, width, height int) *image.RGBA {
 	rect := image.Rect(0, 0, width, height)
 	img := image.NewRGBA(rect)
 	channelStride := width * height
@@ -155,7 +174,11 @@ func postprocessAndSave(data []float32, width, height int, filename string) erro
 			})
 		}
 	}
+	return img
+}
 
+// saveImage is a utility to save an image object to disk
+func saveImage(img image.Image, filename string) error {
 	out, err := os.Create(filename)
 	if err != nil {
 		return err
@@ -165,6 +188,7 @@ func postprocessAndSave(data []float32, width, height int, filename string) erro
 	if filepath.Ext(filename) == ".png" {
 		return png.Encode(out, img)
 	}
+	// Use default JPEG quality
 	return jpeg.Encode(out, img, nil)
 }
 
