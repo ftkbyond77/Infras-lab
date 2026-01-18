@@ -4,7 +4,9 @@ import (
 	"image"
 	"image/color"
 	"image/jpeg"
+	_ "image/jpeg"
 	"image/png"
+	_ "image/png"
 	"log"
 	"os"
 	"path/filepath"
@@ -15,8 +17,8 @@ import (
 )
 
 const (
-	modelPath   = "../model-training/cyclegan_horse2zebra.onnx"
-	inputImage  = "../model-training/data/testA/n02381460_490.jpg"
+	modelPath   = "../model-path/cyclegan_horse2zebra.onnx"
+	inputImage  = "The-Horses-Personality.jpg"
 	outputImage = "zebra_output.jpg"
 	imgSize     = 256
 )
