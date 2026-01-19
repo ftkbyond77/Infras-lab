@@ -14,13 +14,14 @@ jobs:
 
     - name: Build Inference Docker Image
       run: |
-        cd inferences
         docker build -t my-cyclegan-inference:latest .
-    
-    - name: Test Inference Binary (Dry Run)
 
+    - name: Test Inference Server (Health Check)
       run: |
-        docker run --rm my-cyclegan-inference:latest || true
+        docker run -d -p 8080:8080 --name test-container my-cyclegan-inference:latest
+        sleep 5
+        curl --fail http://localhost:8080/health || exit 1
+        docker stop test-container
 
   build-training:
     runs-on: ubuntu-latest
@@ -28,6 +29,7 @@ jobs:
     - uses: actions/checkout@v3
 
     - name: Build Training Docker Image
+      # This stays the same since model-training has its own Dockerfile inside
       run: |
         cd model-training
-        docker build -t my-cyclegan-inference:latest .
+        docker build -t my-cyclegan-training:latest .
