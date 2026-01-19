@@ -1,47 +1,52 @@
 package main
 
 import (
-	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
-	"image/png"
 	"log"
+	"net/http"
 	"os"
-	"path/filepath"
 	"runtime"
 
+	_ "image/png" // Register PNG decoder
 	_ "golang.org/x/image/webp"
 
 	"github.com/yalue/onnxruntime_go"
 	"golang.org/x/image/draw"
 )
 
-// const (
-// 	modelPath    = "../model-path/cyclegan_horse2zebra.onnx"
-// 	inputImage   = "The-Horses-Personality.jpg"
-// 	outputImage  = "zebra_output.jpg"
-// 	compareImage = "compare.jpg"
-// 	imgSize      = 256
-// )
-
 var (
-	modelPath    = getEnv("MODEL_PATH", "../model-path/cyclegan_horse2zebra.onnx")
-	inputImage   = getEnv("INPUT_IMAGE", "The-Horses-Personality.jpg")
-	outputImage  = getEnv("OUTPUT_IMAGE", "zebra_output.jpg")
-	compareImage = getEnv("COMPARE_IMAGE", "compare.jpg")
-	imgSize      = 256
+	// We load the model once, globally
+	session *onnxruntime_go.DynamicAdvancedSession
+	imgSize = 256
 )
-
-func getEnv(key, fallback string) string {
-	if value, exists := os.LookupEnv(key); exists {
-		return value
-	}
-	return fallback
-}
 
 func main() {
 	// 1. Initialize ONNX Runtime
+	initONNX()
+
+	// 2. Setup HTTP Server
+	http.HandleFunc("/infer", handleInference)
+	
+	// Health check for Render
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	log.Printf("Server listening on port %s...", port)
+	if err := http.ListenAndServe(":"+port, nil); err != nil {
+		log.Fatalf("Server failed: %v", err)
+	}
+}
+
+func initONNX() {
 	var libName string
 	if runtime.GOOS == "windows" {
 		libName = "onnxruntime.dll"
@@ -49,16 +54,20 @@ func main() {
 		libName = "libonnxruntime.so"
 	}
 
+	// Ensure library is loaded
 	onnxruntime_go.SetSharedLibraryPath(libName)
 	err := onnxruntime_go.InitializeEnvironment()
 	if err != nil {
-		log.Fatalf("Failed to initialize ONNX environment: %v\nMake sure %s is in the current folder.", err, libName)
+		log.Fatalf("Failed to initialize ONNX environment: %v", err)
 	}
-	defer onnxruntime_go.DestroyEnvironment()
 
-	// 2. Load the Model
-	log.Println("Loading model...")
-	session, err := onnxruntime_go.NewDynamicAdvancedSession(
+	modelPath := os.Getenv("MODEL_PATH")
+	if modelPath == "" {
+		modelPath = "../model-path/cyclegan_horse2zebra.onnx"
+	}
+
+	log.Println("Loading model into memory...")
+	session, err = onnxruntime_go.NewDynamicAdvancedSession(
 		modelPath,
 		[]string{"input"},
 		[]string{"output"},
@@ -67,81 +76,77 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create session: %v", err)
 	}
-	defer session.Destroy()
+	log.Println("Model loaded successfully.")
+}
 
-	// 3. Prepare Input Data
-	log.Printf("Processing image: %s", inputImage)
-	// Modified to return the resized image object as well
-	inputTensorData, resizedInputImg, err := preprocessImage(inputImage, imgSize, imgSize)
-	if err != nil {
-		log.Fatalf("Preprocessing failed: %v", err)
+func handleInference(w http.ResponseWriter, r *http.Request) {
+	// CORS Headers (Enable access from Next.js)
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST")
+	
+	if r.Method == "OPTIONS" {
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
 
+	// 1. Parse Image from Form Data
+	file, _, err := r.FormFile("image")
+	if err != nil {
+		http.Error(w, "Invalid file", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	srcImg, _, err := image.Decode(file)
+	if err != nil {
+		http.Error(w, "Failed to decode image", http.StatusBadRequest)
+		return
+	}
+
+	// 2. Preprocess
+	inputTensorData, _, err := preprocessImage(srcImg, imgSize, imgSize)
+	if err != nil {
+		http.Error(w, "Preprocessing failed", http.StatusInternalServerError)
+		log.Printf("Preprocess error: %v", err)
+		return
+	}
+
+	// 3. Create Tensor
 	shape := onnxruntime_go.NewShape(1, 3, int64(imgSize), int64(imgSize))
 	inputTensor, err := onnxruntime_go.NewTensor[float32](shape, inputTensorData)
 	if err != nil {
-		log.Fatal(err)
+		http.Error(w, "Tensor creation failed", http.StatusInternalServerError)
+		return
 	}
 	defer inputTensor.Destroy()
 
 	// 4. Run Inference
-	log.Println("Running inference...")
 	inputs := []onnxruntime_go.Value{inputTensor}
 	outputs := make([]onnxruntime_go.Value, 1)
 
 	err = session.Run(inputs, outputs)
 	if err != nil {
-		log.Fatalf("Inference failed: %v", err)
+		http.Error(w, "Inference failed", http.StatusInternalServerError)
+		log.Printf("Inference error: %v", err)
+		return
 	}
 
-	// 5. Get Output Data
+	// 5. Post-process
 	outputTensor := outputs[0].(*onnxruntime_go.Tensor[float32])
 	defer outputTensor.Destroy()
-	outputData := outputTensor.GetData()
+	outputImg := tensorToImage(outputTensor.GetData(), imgSize, imgSize)
 
-	// 6. Post-process (Convert Tensor -> Image)
-	outputImg := tensorToImage(outputData, imgSize, imgSize)
-
-	// Save the single output file
-	if err := saveImage(outputImg, outputImage); err != nil {
-		log.Fatalf("Saving output failed: %v", err)
+	// 6. Return Image Response directly
+	w.Header().Set("Content-Type", "image/jpeg")
+	if err := jpeg.Encode(w, outputImg, nil); err != nil {
+		log.Printf("Response write error: %v", err)
 	}
-	log.Printf("Saved output to %s", outputImage)
-
-	// 7. Create and Save Comparison Image (Side-by-Side)
-	log.Println("Creating comparison image...")
-
-	// Create a new image twice as wide
-	comparisonRect := image.Rect(0, 0, imgSize*2, imgSize)
-	comparisonImg := image.NewRGBA(comparisonRect)
-
-	// Draw Original Input on the Left
-	draw.Draw(comparisonImg, image.Rect(0, 0, imgSize, imgSize), resizedInputImg, image.Point{}, draw.Src)
-
-	// Draw Generated Output on the Right
-	draw.Draw(comparisonImg, image.Rect(imgSize, 0, imgSize*2, imgSize), outputImg, image.Point{}, draw.Src)
-
-	// Save the comparison file
-	if err := saveImage(comparisonImg, compareImage); err != nil {
-		log.Fatalf("Saving comparison failed: %v", err)
-	}
-
-	log.Printf("Saved comparison to %s", compareImage)
 }
 
-// preprocessImage returns the tensor data AND the resized image object
-func preprocessImage(path string, width, height int) ([]float32, image.Image, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer file.Close()
-
-	img, _, err := image.Decode(file)
-	if err != nil {
-		return nil, nil, fmt.Errorf("decode error: %v", err)
-	}
-
+func preprocessImage(img image.Image, width, height int) ([]float32, image.Image, error) {
 	// Resize using high-quality resampling
 	dst := image.NewRGBA(image.Rect(0, 0, width, height))
 	draw.CatmullRom.Scale(dst, dst.Rect, img, img.Bounds(), draw.Over, nil)
@@ -166,7 +171,6 @@ func preprocessImage(path string, width, height int) ([]float32, image.Image, er
 	return tensor, dst, nil
 }
 
-// tensorToImage converts raw output data back to a Go Image
 func tensorToImage(data []float32, width, height int) *image.RGBA {
 	rect := image.Rect(0, 0, width, height)
 	img := image.NewRGBA(rect)
@@ -176,7 +180,6 @@ func tensorToImage(data []float32, width, height int) *image.RGBA {
 		for x := 0; x < width; x++ {
 			idx := y*width + x
 
-			// Denormalize: (val * 0.5) + 0.5
 			r := (data[idx] * 0.5) + 0.5
 			g := (data[idx+channelStride] * 0.5) + 0.5
 			b := (data[idx+(2*channelStride)] * 0.5) + 0.5
@@ -192,27 +195,8 @@ func tensorToImage(data []float32, width, height int) *image.RGBA {
 	return img
 }
 
-// saveImage is a utility to save an image object to disk
-func saveImage(img image.Image, filename string) error {
-	out, err := os.Create(filename)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	if filepath.Ext(filename) == ".png" {
-		return png.Encode(out, img)
-	}
-	// Use default JPEG quality
-	return jpeg.Encode(out, img, nil)
-}
-
 func clamp(val float32) float32 {
-	if val < 0 {
-		return 0
-	}
-	if val > 1 {
-		return 1
-	}
+	if val < 0 { return 0 }
+	if val > 1 { return 1 }
 	return val
 }

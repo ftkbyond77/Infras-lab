@@ -59,3 +59,19 @@ docker system prune -f
 # 4. Clear Temporary Data (/tmp)
 rm -rf /tmp/data
 ```
+
+
+Next.js (Front-End System)
+```
+1. Inference Model Runtim
+docker build -t horse2zebra-app .
+docker run -p 8080:8080 horse2zebra-app
+
+2. cd frontend 
+if not exists:
+-> npx create-next-app@latest frontend
+else:
+-> npm run dev
+
+3. Open Localhost:3000
+```
