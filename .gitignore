@@ -1,9 +1,6 @@
-model-training/data/
-
 ##################################
 # DATASETS & LARGE FILES
 ##################################
-data/
 dataset/
 datasets/
 model/data/
