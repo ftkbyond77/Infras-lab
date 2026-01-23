@@ -2,6 +2,8 @@
 # DATASETS & LARGE FILES
 ##################################
 dataset/
+data/
+model-training/data/
 datasets/
 model/data/
 *.zip

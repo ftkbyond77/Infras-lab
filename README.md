@@ -134,7 +134,7 @@ For Check Port
 lsof -i :8081
 
 Kill (Process)
-pkill -f "<process_name>"
+pkill -f "<process_name>" or pkill -f airflow
 
 Kill (Port)
 kill <process_number> 
@@ -146,6 +146,19 @@ CREATE AIRFLOW DAG
 mkdir -p ~/airflow/dags
 nano ~/airflow/dags/cyclegan_pipeline.py
 
+```
+
+
+For Fix No Data Found (training_pipeline.py in ~/airflow/dags/)
+```
+1. Check the Database Connection
+airflow config get-value database sql_alchemy_conn -> should be postgresql+psycopg2://
+
+2. Force a DAG "Reserialize" (Force Airflow to repair the link between the file and the database)
+airflow dags reserialize
+
+3. The Bypass Test (for test)
+airflow dags test horse2zebra_training_pipeline 2024-01-01
 ```
 
 

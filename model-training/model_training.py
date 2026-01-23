@@ -28,14 +28,16 @@ import torchvision.transforms as transforms
 #     "DEVICE": "cuda" if torch.cuda.is_available() else "cpu"
 # }
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 CONFIG = {
-    "TRAIN_DIR_A": "data/trainA",
-    "TRAIN_DIR_B": "data/trainB",
+    "TRAIN_DIR_A": os.path.join(BASE_DIR, "data/trainA"),
+    "TRAIN_DIR_B": os.path.join(BASE_DIR, "data/trainB"),
     "IMG_SIZE": 256,
     "BATCH_SIZE": 1,
     "LR": 2e-4,
     "EPOCHS": 5,                    # Low for testing,
-    "NUM_WORKERS": 4,
+    "NUM_WORKERS": 5,
     "DEVICE": "cuda" if torch.cuda.is_available() else "cpu",
     "MLFLOW_URI": "http://localhost:5000",
     "EXPERIMENT_NAME": "Image-to-Image_CycleGAN"
