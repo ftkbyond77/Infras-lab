@@ -63,7 +63,7 @@ rm -rf /tmp/data
 
 Next.js (Front-End System)
 ```
-1. Inference Model Runtim
+1. Inference Model Runtime
 docker build -t horse2zebra-app .
 docker run -p 8080:8080 horse2zebra-app
 
