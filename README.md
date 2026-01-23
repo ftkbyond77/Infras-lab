@@ -75,3 +75,90 @@ else:
 
 3. Open Localhost:3000
 ```
+
+
+Run By Shell (start.sh)
+```
+chmod +x start.sh
+
+./start.sh
+```
+
+============== DATABASE SECTION (PostgreSQL) ==============
+```
+# Switch to the postgres user
+sudo -i -u postgres
+
+# Enter the Postgres shell
+psql
+
+# --- Inside SQL Shell ---
+# 1. Create the database
+CREATE DATABASE airflow_db;
+
+# 2. Create the user (password: 'airflow_pass')
+CREATE USER airflow_user WITH PASSWORD 'airflow_pass';
+
+# 3. Grant privileges
+GRANT ALL PRIVILEGES ON DATABASE airflow_db TO airflow_user;
+
+# 4. (Specific to Postgres 15+) Grant schema usage
+\c airflow_db
+GRANT ALL ON SCHEMA public TO airflow_user;
+
+# Exit
+\q
+
+```
+
+Airflow Metadata USER
+```
+airflow users create \
+    --username admin \
+    --firstname Admin \
+    --lastname User \
+    --role Admin \
+    --email admin@gmail.com \
+    --password admin
+```
+
+Run Airflow (Apache Airflow 3 ++)
+```
+airflow scheduler &
+airflow api-server -p 8081 &
+
+For Check Process
+ps aux | grep airflow
+
+For Check Port
+lsof -i :8081
+
+Kill (Process)
+pkill -f "<process_name>"
+
+Kill (Port)
+kill <process_number> 
+ex. kill 21390
+```
+
+CREATE AIRFLOW DAG
+```
+mkdir -p ~/airflow/dags
+nano ~/airflow/dags/cyclegan_pipeline.py
+
+```
+
+
+Current Flow
+```
+Terminal 1: mlflow ui
+Terminal 2: airflow scheduler &
+            airflow api-server -p 8081 &
+Terminal 3: python3 model-training/model_training.py
+  Option B: Production Traigger (Via Airflow) If Option A works
+            airflow dags trigger horse2zebra_training_pipeline
+
+Check
+Apache Airflow: Localhost:8081
+MLflow: Localhost:5000
+```
