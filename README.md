@@ -175,3 +175,34 @@ Check
 Apache Airflow: Localhost:8081
 MLflow: Localhost:5000
 ```
+
+Permission (for debug)
+```
+sudo chown -R $USER:$USER <folder_name>
+chmod -R 777 <folder_name>
+```
+
+
+=== Container ===
+```
+1. docker compose build --no-cache
+2. docker compose up -d postgres
+sleep 10 (wait for database wake up)
+
+  2.1 docker compose run --rm airflow-api-server airflow db migrate
+  2.2 docker-compose run --rm airflow-api-server airflow users create \
+    --username admin \
+    --password admin \
+    --firstname Admin \
+    --lastname User \
+    --role Admin \
+    --email admin@example.com
+
+3. docker compose up
+```
+
+=== Shell ===
+```
+chmod +x start.sh
+./start.sh
+```

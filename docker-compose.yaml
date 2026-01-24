@@ -1,0 +1,122 @@
+x-common:
+  &common-env
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+  AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+
+  AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
+  AIRFLOW__API__AUTH_BACKEND: airflow.api.auth.backend.basic_auth
+  AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+
+  AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_WEB_KEY}
+  AIRFLOW__CORE__SECRET_KEY: ${AIRFLOW_CORE_KEY}
+
+  MLFLOW_TRACKING_URI: http://mlflow:5000
+  AIRFLOW_VAR_HOST_MODEL_STORE: ${HOST_MODEL_STORE_PATH}
+
+services:
+
+  # -------------------------------------------------------
+  # POSTGRES (Airflow DB + MLflow DB)
+  # -------------------------------------------------------
+  postgres:
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql  # ✅ create mlflow DB
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # -------------------------------------------------------
+  # MLFLOW (ใช้ DB ชื่อ mlflow)
+  # -------------------------------------------------------
+  mlflow:
+    build:
+      context: .
+      dockerfile: Dockerfile.mlflow
+    command: >
+      mlflow server
+      --backend-store-uri postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/mlflow
+      --default-artifact-root /mlflow/artifacts
+      --host 0.0.0.0
+    ports:
+      - "5000:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./model_store:/mlflow/artifacts
+
+  # -------------------------------------------------------
+  # AIRFLOW API SERVER
+  # -------------------------------------------------------
+  airflow-api-server:
+    build: ./airflow
+    command: airflow api-server
+    restart: always
+    environment:
+      <<: *common-env
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./model_store:/opt/airflow/model_store
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # -------------------------------------------------------
+  # AIRFLOW SCHEDULER
+  # -------------------------------------------------------
+  airflow-scheduler:
+    build: ./airflow
+    command: airflow scheduler
+    restart: always
+    environment:
+      <<: *common-env
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./model_store:/opt/airflow/model_store
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      airflow-api-server:
+        condition: service_started
+
+  # -------------------------------------------------------
+  # INFERENCE SERVICE
+  # -------------------------------------------------------
+  inference:
+    build: ./inferences
+    restart: always
+    environment:
+      - MODEL_PATH=/models/latest/cyclegan.onnx
+      - PORT=8080
+    volumes:
+      - ./model_store/latest:/models/latest
+    ports:
+      - "8081:8080"
+    depends_on:
+      - airflow-api-server
+
+  # -------------------------------------------------------
+  # FRONTEND (Next.js)
+  # -------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8081/infer
+    ports:
+      - "3000:3000"
+    restart: on-failure
+
+volumes:
+  postgres_data:

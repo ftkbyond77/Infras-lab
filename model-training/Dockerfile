@@ -1,24 +1,12 @@
-FROM python:3.10-slim
+# model-training/Dockerfile
+FROM pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y libgl1-mesa-glx && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir \
-    torch \
-    torchvision \
-    torchaudio \
-    onnx \
-    tqdm \
-    pillow \
-    numpy
+RUN pip install mlflow pillow tqdm onnx
 
-COPY model_training.py .
-
-RUN mkdir -p data/trainA data/trainB saved_models
-
-ENV MODE=train
+COPY . /app
 
 CMD ["python", "model_training.py"]

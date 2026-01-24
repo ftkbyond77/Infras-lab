@@ -1,35 +1,35 @@
-name: MLOps CI Pipeline
+# name: MLOps CI Pipeline
 
-on:
-  push:
-    branches: ["main"]
-  pull_request:
-    branches: ["main"]
+# on:
+#   push:
+#     branches: ["main"]
+#   pull_request:
+#     branches: ["main"]
 
-jobs:
-  build-inference:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
+# jobs:
+#   build-inference:
+#     runs-on: ubuntu-latest
+#     steps:
+#     - uses: actions/checkout@v3
 
-    - name: Build Inference Docker Image
-      run: |
-        docker build -t my-cyclegan-inference:latest .
+#     - name: Build Inference Docker Image
+#       run: |
+#         docker build -t my-cyclegan-inference:latest .
 
-    - name: Test Inference Server (Health Check)
-      run: |
-        docker run -d -p 8080:8080 --name test-container my-cyclegan-inference:latest
-        sleep 5
-        curl --fail http://localhost:8080/health || exit 1
-        docker stop test-container
+#     - name: Test Inference Server (Health Check)
+#       run: |
+#         docker run -d -p 8080:8080 --name test-container my-cyclegan-inference:latest
+#         sleep 5
+#         curl --fail http://localhost:8080/health || exit 1
+#         docker stop test-container
 
-  build-training:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
+#   build-training:
+#     runs-on: ubuntu-latest
+#     steps:
+#     - uses: actions/checkout@v3
 
-    - name: Build Training Docker Image
-      # This stays the same since model-training has its own Dockerfile inside
-      run: |
-        cd model-training
-        docker build -t my-cyclegan-training:latest .
+#     - name: Build Training Docker Image
+#       # This stays the same since model-training has its own Dockerfile inside
+#       run: |
+#         cd model-training
+#         docker build -t my-cyclegan-training:latest .

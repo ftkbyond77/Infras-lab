@@ -24,7 +24,7 @@ export default function Home() {
 
     try {
       // Connect to your Docker Backend (Port 8080)
-      const response = await fetch("http://localhost:8080/infer", {
+      const response = await fetch("http://localhost:8081/infer", {
         method: "POST",
         body: formData,
       });

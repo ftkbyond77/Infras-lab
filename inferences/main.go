@@ -10,6 +10,7 @@ import (
 	"runtime"
 
 	_ "image/png" // Register PNG decoder
+
 	_ "golang.org/x/image/webp"
 
 	"github.com/yalue/onnxruntime_go"
@@ -28,7 +29,7 @@ func main() {
 
 	// 2. Setup HTTP Server
 	http.HandleFunc("/infer", handleInference)
-	
+
 	// Health check for Render
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -83,8 +84,10 @@ func handleInference(w http.ResponseWriter, r *http.Request) {
 	// CORS Headers (Enable access from Next.js)
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "POST")
-	
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
 	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 	if r.Method != "POST" {
@@ -196,7 +199,11 @@ func tensorToImage(data []float32, width, height int) *image.RGBA {
 }
 
 func clamp(val float32) float32 {
-	if val < 0 { return 0 }
-	if val > 1 { return 1 }
+	if val < 0 {
+		return 0
+	}
+	if val > 1 {
+		return 1
+	}
 	return val
 }
