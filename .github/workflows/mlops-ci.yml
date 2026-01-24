@@ -1,35 +1,81 @@
-# name: MLOps CI Pipeline
+name: MLOps Production CI
 
-# on:
-#   push:
-#     branches: ["main"]
-#   pull_request:
-#     branches: ["main"]
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
 
-# jobs:
-#   build-inference:
-#     runs-on: ubuntu-latest
-#     steps:
-#     - uses: actions/checkout@v3
+jobs:
+  # ------------------------------------------------------------------
+  # JOB 1: INFERENCE SERVICE (Go)
+  # ------------------------------------------------------------------
+  build-inference:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
 
-#     - name: Build Inference Docker Image
-#       run: |
-#         docker build -t my-cyclegan-inference:latest .
+      - name: Build Inference Docker Image
+        # 'inferences' directory context
+        run: |
+          cd inferences
+          docker build -t infras-lab-inference:latest .
 
-#     - name: Test Inference Server (Health Check)
-#       run: |
-#         docker run -d -p 8080:8080 --name test-container my-cyclegan-inference:latest
-#         sleep 5
-#         curl --fail http://localhost:8080/health || exit 1
-#         docker stop test-container
+      - name: Prepare Test Data (Mock Model)
+        run: |
+          mkdir -p model_store/latest
+          # Create a dummy 1MB file so the path exists
+          dd if=/dev/zero of=model_store/latest/cyclegan.onnx bs=1024 count=1024
+          chmod -R 777 model_store
 
-#   build-training:
-#     runs-on: ubuntu-latest
-#     steps:
-#     - uses: actions/checkout@v3
+      - name: Test Inference Health Check
+        run: |
+          docker run -d \
+            -p 8081:8080 \
+            -e MODEL_PATH=/models/cyclegan.onnx \
+            -v $(pwd)/model_store/latest/cyclegan.onnx:/models/cyclegan.onnx \
+            --name test-inference \
+            infras-lab-inference:latest
+          
+          echo "Waiting for service to start..."
+          sleep 5
+          
+          # Check container logs if it failed
+          docker logs test-inference
+          
+          # Hit the health endpoint
+          curl --fail http://localhost:8081/health || exit 1
+          
+          docker stop test-inference
 
-#     - name: Build Training Docker Image
-#       # This stays the same since model-training has its own Dockerfile inside
-#       run: |
-#         cd model-training
-#         docker build -t my-cyclegan-training:latest .
+  # ------------------------------------------------------------------
+  # JOB 2: FRONTEND (Next.js)
+  # ------------------------------------------------------------------
+  build-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Build Frontend Docker Image
+        run: |
+          cd frontend
+          docker build \
+            --build-arg NEXT_PUBLIC_API_URL=http://localhost:8081/infer \
+            -t infras-lab-frontend:latest .
+
+  # ------------------------------------------------------------------
+  # JOB 3: MODEL TRAINING (Python)
+  # ------------------------------------------------------------------
+  build-training:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Build Training Docker Image
+        run: |
+          if [ -d "model-training" ]; then
+            cd model-training
+            docker build -t infras-lab-training:latest .
+          else
+            echo "Training folder not found, skipping..."
+          fi
