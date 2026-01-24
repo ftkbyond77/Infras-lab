@@ -1,81 +1,123 @@
-name: MLOps Production CI
+name: MLOps CI Pipeline
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main", "master"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main", "master"]
+
+env:
+  POSTGRES_USER: airflow
+  POSTGRES_PASSWORD: airflow
+  POSTGRES_DB: airflow
 
 jobs:
-  # ------------------------------------------------------------------
-  # JOB 1: INFERENCE SERVICE (Go)
-  # ------------------------------------------------------------------
-  build-inference:
+  # -----------------------------------------
+  # JOB 1: Test Inference Service (Go + ONNX)
+  # -----------------------------------------
+  test-inference-go:
+    name: Inference Service (Go)
+    runs-on: ubuntu-latest 
+    defaults:
+      run:
+        working-directory: ./Inference
+    steps:
+      - uses: actions/checkout@v4
+
+      # -----------------------------------------------
+      # 1. Prepare ONNX Runtime Library (Shared Object)
+      # -----------------------------------------------
+      - name: Download ONNX Runtime (Linux)
+        run: |
+          # Download official release to ensure compatibility with Ubuntu runner
+          wget https://github.com/microsoft/onnxruntime/releases/download/v1.16.3/onnxruntime-linux-x64-1.16.3.tgz
+          tar -zxvf onnxruntime-linux-x64-1.16.3.tgz
+          # Move the .so file to the current folder so Go can find it easily
+          cp onnxruntime-linux-x64-1.16.3/lib/libonnxruntime.so.1.16.3 ./libonnxruntime.so
+          
+          # Verify file exists
+          ls -lh libonnxruntime.so
+
+      # -------------------------------------------------
+      # 2. Generate Dummy ONNX Model (Using Python)
+      # -------------------------------------------------
+      # validate .oonx file to test the loading machanism.
+      - name: Set up Python for Dummy Model Gen
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: Generate Dummy ONNX Model
+        run: |
+          pip install torch onnx
+          cat <<EOF > generate_dummy.py
+          import torch
+          import torch.nn as nn 
+
+          # Simple Identity Model: Return input as output
+          class IdentityModel(nn.Module):
+              def forward(self, x):
+                  return x 
+          
+          model = IdentityModel()
+          dummy_input = torch.randn(1, 3, 256, 256)
+
+          # Export to ONNX
+          torch.onnx.export(
+              model,
+              dummy_input,
+              "dummy_cyclegan.onnx",
+              input_names=['input'],
+              output_names=['output'],
+              opset_version=12
+          )
+          print("Dummy model generated: dummy_cyclegan.onnx")
+          EOF 
+          python generate_dummy.py
+      
+      
+      # ---------------------------
+      # 3. Run Go Tests
+      # ---------------------------
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Verify dependencies
+        run: go mod verify 
+
+      - name: Run Go Unit & Integration Tests
+        env:
+          # Tell Go where to find the .so file
+          LD_LIBRARY_PATH: ${{ github.workspace }}/inferences
+          # Point the test to dummy model
+          MODEL_PATH: ./dummy_cyclegan.onnx
+        run: |
+          go test -v main_test.go main.go
+          
+  
+  # ---------------------------------
+  # JOB 2: Test Airflow
+  # ---------------------------------
+  test-airflow:
+    name: Airflow DAG Integrity
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Build Inference Docker Image
-        # 'inferences' directory context
+      - uses: actions/checkout@v4 
+      - name: Set up Python 
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install Airflow dependencies
+        run: pip install "apache-airflow==2.9.0" \
+              --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.9.0/constraints-3.10.txt"
+      - name: Test DAG Integrity
         run: |
-          cd inferences
-          docker build -t infras-lab-inference:latest .
-
-      - name: Prepare Test Data (Mock Model)
-        run: |
-          mkdir -p model_store/latest
-          # Create a dummy 1MB file so the path exists
-          dd if=/dev/zero of=model_store/latest/cyclegan.onnx bs=1024 count=1024
-          chmod -R 777 model_store
-
-      - name: Test Inference Health Check
-        run: |
-          docker run -d \
-            -p 8081:8080 \
-            -e MODEL_PATH=/models/cyclegan.onnx \
-            -v $(pwd)/model_store/latest/cyclegan.onnx:/models/cyclegan.onnx \
-            --name test-inference \
-            infras-lab-inference:latest
-          
-          echo "Waiting for service to start..."
-          sleep 5
-          
-          # Check container logs if it failed
-          docker logs test-inference
-          
-          # Hit the health endpoint
-          curl --fail http://localhost:8081/health || exit 1
-          
-          docker stop test-inference
-
-  # ------------------------------------------------------------------
-  # JOB 2: FRONTEND (Next.js)
-  # ------------------------------------------------------------------
-  build-frontend:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Build Frontend Docker Image
-        run: |
-          cd frontend
-          docker build \
-            --build-arg NEXT_PUBLIC_API_URL=http://localhost:8081/infer \
-            -t infras-lab-frontend:latest .
-
-  # ------------------------------------------------------------------
-  # JOB 3: MODEL TRAINING (Python)
-  # ------------------------------------------------------------------
-  build-training:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Build Training Docker Image
-        run: |
-          if [ -d "model-training" ]; then
-            cd model-training
-            docker build -t infras-lab-training:latest .
-          else
-            echo "Training folder not found, skipping..."
-          fi
+          cat <<EOT >> test_dag_integrity.py
+          from airflow.models import DagBag
+          def test_dags_load():
+              dag_bag = DagBag(dag_folder='airflow/dags', include_examples=False)
+              assert len(dag_bag.import_errors) == 0, f"Errors: {dag_bag.import_errors}"
+          EOT
+          pytest test_dag_integrity.py
