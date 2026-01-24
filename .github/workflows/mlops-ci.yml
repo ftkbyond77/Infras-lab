@@ -2,31 +2,32 @@ name: MLOps CI Pipeline
 
 on:
   push:
-    branches: ["main", "master"]
+    branches: [ "main", "master" ]
   pull_request:
-    branches: ["main", "master"]
+    branches: [ "main", "master" ]
 
 env:
-  POSTGRES_USER: airflow
-  POSTGRES_PASSWORD: airflow
+  # Common Env Vars
+  POSTGRES_USER: user
+  POSTGRES_PASSWORD: password
   POSTGRES_DB: airflow
 
 jobs:
-  # -----------------------------------------
+  # ------------------------------------------------------------------
   # JOB 1: Test Inference Service (Go + ONNX)
-  # -----------------------------------------
+  # ------------------------------------------------------------------
   test-inference-go:
     name: Inference Service (Go)
-    runs-on: ubuntu-latest 
+    runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ./Inference
+        working-directory: ./inferences
     steps:
       - uses: actions/checkout@v4
 
-      # -----------------------------------------------
+      # ---------------------------------------------------------
       # 1. Prepare ONNX Runtime Library (Shared Object)
-      # -----------------------------------------------
+      # ---------------------------------------------------------
       - name: Download ONNX Runtime (Linux)
         run: |
           # Download official release to ensure compatibility with Ubuntu runner
@@ -38,10 +39,9 @@ jobs:
           # Verify file exists
           ls -lh libonnxruntime.so
 
-      # -------------------------------------------------
+      # ---------------------------------------------------------
       # 2. Generate Dummy ONNX Model (Using Python)
-      # -------------------------------------------------
-      # validate .oonx file to test the loading machanism.
+      # ---------------------------------------------------------
       - name: Set up Python for Dummy Model Gen
         uses: actions/setup-python@v5
         with:
@@ -52,65 +52,63 @@ jobs:
           pip install torch onnx
           cat <<EOF > generate_dummy.py
           import torch
-          import torch.nn as nn 
-
-          # Simple Identity Model: Return input as output
+          import torch.nn as nn
+          
+          # Simple Identity Model: Returns input as output
           class IdentityModel(nn.Module):
               def forward(self, x):
-                  return x 
+                  return x
           
           model = IdentityModel()
           dummy_input = torch.randn(1, 3, 256, 256)
-
+          
           # Export to ONNX
           torch.onnx.export(
-              model,
-              dummy_input,
-              "dummy_cyclegan.onnx",
-              input_names=['input'],
+              model, 
+              dummy_input, 
+              "dummy_cyclegan.onnx", 
+              input_names=['input'], 
               output_names=['output'],
               opset_version=12
           )
           print("Dummy model generated: dummy_cyclegan.onnx")
-          EOF 
+          EOF
           python generate_dummy.py
-      
-      
-      # ---------------------------
+
+      # ---------------------------------------------------------
       # 3. Run Go Tests
-      # ---------------------------
+      # ---------------------------------------------------------
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
 
       - name: Verify dependencies
-        run: go mod verify 
+        run: go mod verify
 
       - name: Run Go Unit & Integration Tests
         env:
-          # Tell Go where to find the .so file
+          # Tell Go where to find the .so file we just downloaded
           LD_LIBRARY_PATH: ${{ github.workspace }}/inferences
-          # Point the test to dummy model
+          # Point the test to our dummy model
           MODEL_PATH: ./dummy_cyclegan.onnx
         run: |
           go test -v main_test.go main.go
-          
-  
-  # ---------------------------------
-  # JOB 2: Test Airflow
-  # ---------------------------------
+
+  # ------------------------------------------------------------------
+  # JOB 2: Test Airflow (Keep existing logic)
+  # ------------------------------------------------------------------
   test-airflow:
     name: Airflow DAG Integrity
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4 
-      - name: Set up Python 
+      - uses: actions/checkout@v4
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
       - name: Install Airflow dependencies
-        run: pip install "apache-airflow==2.9.0" --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.9.0/constraints-3.10.txt"
+        run: pip install apache-airflow pytest
       - name: Test DAG Integrity
         run: |
           cat <<EOT >> test_dag_integrity.py
