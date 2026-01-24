@@ -110,8 +110,7 @@ jobs:
         with:
           python-version: '3.10'
       - name: Install Airflow dependencies
-        run: pip install "apache-airflow==2.9.0" \
-              --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.9.0/constraints-3.10.txt"
+        run: pip install "apache-airflow==2.9.0" --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.9.0/constraints-3.10.txt"
       - name: Test DAG Integrity
         run: |
           cat <<EOT >> test_dag_integrity.py
