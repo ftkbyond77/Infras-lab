@@ -1,9 +1,12 @@
 from airflow import DAG
 from airflow.providers.docker.operators.docker import DockerOperator
-from airflow.operators.python import PythonOperator, BranchPythonOperator
-from airflow.operators.bash import BashOperator
-from airflow.providers.http.operators.http import SimpleHttpOperator
-from airflow.utils.dates import days_ago
+from docker.types import Mount
+# from airflow.operators.python import PythonOperator, BranchPythonOperator
+from airflow.providers.standard.operators.python import PythonOperator, BranchPythonOperator
+from airflow.providers.standard.operators.bash import BashOperator
+# from airflow.operators.bash import BashOperator
+from airflow.providers.http.operators.http import HttpOperator
+from datetime import datetime, timezone
 import os
 import shutil
 
@@ -11,7 +14,7 @@ import shutil
 # ------------------------------------------------------------------------------
 # CONFIGURATION
 # ------------------------------------------------------------------------------
-HOST_MODEL_STORE = os.getenv("AIRFLOW_VAR_HOST_MODEL_STORE")
+HOST_MODEL_STORE = os.getenv("AIRFLOW_VAR_HOST_MODEL_STORE", "/tmp/model_store")
 
 
 AIRFLOW_DATA_PATH = "/opt/airflow/model_store/data"
@@ -20,8 +23,7 @@ PROCESSED_PATH = f"{AIRFLOW_DATA_PATH}/processed"
 
 default_args = {
     'owner': 'admin',
-    # 'start_date': datetime(2025, 1, 1),
-    'start_date': days_ago(1),
+    'start_date': datetime(2025, 1, 1, tzinfo=timezone.utc),
     'retries': 0,
 }
 
@@ -51,9 +53,9 @@ with DAG('02_training_pipeline', default_args=default_args, schedule=None, catch
     # Runs the training script inside the PyTorch container
     train_model = DockerOperator(
         task_id='train_model_container',
-        image='infras-lab-inference:latest', # Ensure this matches your training image name
+        image='infras-lab-inference:latest', 
         api_version='auto',
-        auto_remove=True,
+        auto_remove="success",
         network_mode='infras-lab_default', # Must match docker-compose network name
         docker_url='unix://var/run/docker.sock',
         command='python model_training.py',
@@ -63,8 +65,13 @@ with DAG('02_training_pipeline', default_args=default_args, schedule=None, catch
             'BASE_DATA_DIR': '/outputs/data/processed',
             'OUTPUT_MODEL_DIR': '/outputs/candidates'
         },
-        # Mount HOST path to CONTAINER path
-        volumes=[f'{HOST_MODEL_STORE}:/outputs'],
+        mounts=[
+            Mount(
+                source=HOST_MODEL_STORE,    # Host path
+                target='/outputs',          # container path
+                type='bind'
+            )
+        ]
     )
 
 
@@ -105,7 +112,7 @@ with DAG('03_deploy_pipeline', default_args=default_args, schedule=None, catchup
 
     # Trigger Hot-Reload on Go Service
     # Note: Requires Connection 'inference_server' (Host: inference, Port: 8080)
-    reload_service = SimpleHttpOperator(
+    reload_service = HttpOperator(
         task_id='trigger_hot_reload',
         http_conn_id='inference_server', 
         endpoint='reload',

@@ -66,6 +66,15 @@ services:
         --email admin@example.com || true
       "
 
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: airflow dag-processor
+    restart: always
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+
   airflow-api-server:
     <<: *airflow-common
     command: airflow api-server
