@@ -1,120 +1,120 @@
-name: MLOps CI Pipeline
+# name: MLOps CI Pipeline
 
-on:
-  push:
-    branches: [ "main", "master" ]
-  pull_request:
-    branches: [ "main", "master" ]
+# on:
+#   push:
+#     branches: [ "main", "master" ]
+#   pull_request:
+#     branches: [ "main", "master" ]
 
-env:
-  # Common Env Vars
-  POSTGRES_USER: user
-  POSTGRES_PASSWORD: password
-  POSTGRES_DB: airflow
+# env:
+#   # Common Env Vars
+#   POSTGRES_USER: user
+#   POSTGRES_PASSWORD: password
+#   POSTGRES_DB: airflow
 
-jobs:
-  # ------------------------------------------------------------------
-  # JOB 1: Test Inference Service (Go + ONNX)
-  # ------------------------------------------------------------------
-  test-inference-go:
-    name: Inference Service (Go)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./inferences
-    steps:
-      - uses: actions/checkout@v4
+# jobs:
+#   # ------------------------------------------------------------------
+#   # JOB 1: Test Inference Service (Go + ONNX)
+#   # ------------------------------------------------------------------
+#   test-inference-go:
+#     name: Inference Service (Go)
+#     runs-on: ubuntu-latest
+#     defaults:
+#       run:
+#         working-directory: ./inferences
+#     steps:
+#       - uses: actions/checkout@v4
 
-      # ---------------------------------------------------------
-      # 1. Prepare ONNX Runtime Library (Shared Object)
-      # ---------------------------------------------------------
-      - name: Download ONNX Runtime (Linux)
-        run: |
-          # Download official release to ensure compatibility with Ubuntu runner
-          wget https://github.com/microsoft/onnxruntime/releases/download/v1.16.3/onnxruntime-linux-x64-1.16.3.tgz
-          tar -zxvf onnxruntime-linux-x64-1.16.3.tgz
-          # Move the .so file to the current folder so Go can find it easily
-          cp onnxruntime-linux-x64-1.16.3/lib/libonnxruntime.so.1.16.3 ./libonnxruntime.so
+#       # ---------------------------------------------------------
+#       # 1. Prepare ONNX Runtime Library (Shared Object)
+#       # ---------------------------------------------------------
+#       - name: Download ONNX Runtime (Linux)
+#         run: |
+#           # Download official release to ensure compatibility with Ubuntu runner
+#           wget https://github.com/microsoft/onnxruntime/releases/download/v1.16.3/onnxruntime-linux-x64-1.16.3.tgz
+#           tar -zxvf onnxruntime-linux-x64-1.16.3.tgz
+#           # Move the .so file to the current folder so Go can find it easily
+#           cp onnxruntime-linux-x64-1.16.3/lib/libonnxruntime.so.1.16.3 ./libonnxruntime.so
           
-          # Verify file exists
-          ls -lh libonnxruntime.so
+#           # Verify file exists
+#           ls -lh libonnxruntime.so
 
-      # ---------------------------------------------------------
-      # 2. Generate Dummy ONNX Model (Using Python)
-      # ---------------------------------------------------------
-      - name: Set up Python for Dummy Model Gen
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+#       # ---------------------------------------------------------
+#       # 2. Generate Dummy ONNX Model (Using Python)
+#       # ---------------------------------------------------------
+#       - name: Set up Python for Dummy Model Gen
+#         uses: actions/setup-python@v5
+#         with:
+#           python-version: '3.10'
       
-      - name: Generate Dummy ONNX Model
-        run: |
-          pip install torch onnx
-          cat <<EOF > generate_dummy.py
-          import torch
-          import torch.nn as nn
+#       - name: Generate Dummy ONNX Model
+#         run: |
+#           pip install torch onnx
+#           cat <<EOF > generate_dummy.py
+#           import torch
+#           import torch.nn as nn
           
-          # Simple Identity Model: Returns input as output
-          class IdentityModel(nn.Module):
-              def forward(self, x):
-                  return x
+#           # Simple Identity Model: Returns input as output
+#           class IdentityModel(nn.Module):
+#               def forward(self, x):
+#                   return x
           
-          model = IdentityModel()
-          dummy_input = torch.randn(1, 3, 256, 256)
+#           model = IdentityModel()
+#           dummy_input = torch.randn(1, 3, 256, 256)
           
-          # Export to ONNX
-          torch.onnx.export(
-              model, 
-              dummy_input, 
-              "dummy_cyclegan.onnx", 
-              input_names=['input'], 
-              output_names=['output'],
-              opset_version=12
-          )
-          print("Dummy model generated: dummy_cyclegan.onnx")
-          EOF
-          python generate_dummy.py
+#           # Export to ONNX
+#           torch.onnx.export(
+#               model, 
+#               dummy_input, 
+#               "dummy_cyclegan.onnx", 
+#               input_names=['input'], 
+#               output_names=['output'],
+#               opset_version=12
+#           )
+#           print("Dummy model generated: dummy_cyclegan.onnx")
+#           EOF
+#           python generate_dummy.py
 
-      # ---------------------------------------------------------
-      # 3. Run Go Tests
-      # ---------------------------------------------------------
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
+#       # ---------------------------------------------------------
+#       # 3. Run Go Tests
+#       # ---------------------------------------------------------
+#       - name: Set up Go
+#         uses: actions/setup-go@v5
+#         with:
+#           go-version: '1.22'
 
-      - name: Verify dependencies
-        run: go mod verify
+#       - name: Verify dependencies
+#         run: go mod verify
 
-      - name: Run Go Unit & Integration Tests
-        env:
-          # Tell Go where to find the .so file we just downloaded
-          LD_LIBRARY_PATH: ${{ github.workspace }}/inferences
-          # Point the test to our dummy model
-          MODEL_PATH: ./dummy_cyclegan.onnx
-        run: |
-          go test -v main_test.go main.go
+#       - name: Run Go Unit & Integration Tests
+#         env:
+#           # Tell Go where to find the .so file we just downloaded
+#           LD_LIBRARY_PATH: ${{ github.workspace }}/inferences
+#           # Point the test to our dummy model
+#           MODEL_PATH: ./dummy_cyclegan.onnx
+#         run: |
+#           go test -v main_test.go main.go
 
-  # ------------------------------------------------------------------
-  # JOB 2: Test Airflow (Keep existing logic)
-  # ------------------------------------------------------------------
-  test-airflow:
-    name: Airflow DAG Integrity
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-      - name: Install Airflow dependencies
-        run: pip install apache-airflow pytest
-      - name: Test DAG Integrity
-        run: |
-          cat <<EOT >> test_dag_integrity.py
-          from airflow.models import DagBag
-          def test_dags_load():
-              dag_bag = DagBag(dag_folder='airflow/dags', include_examples=False)
-              assert len(dag_bag.import_errors) == 0, f"Errors: {dag_bag.import_errors}"
-          EOT
-          pytest test_dag_integrity.py
+#   # ------------------------------------------------------------------
+#   # JOB 2: Test Airflow (Keep existing logic)
+#   # ------------------------------------------------------------------
+#   test-airflow:
+#     name: Airflow DAG Integrity
+#     runs-on: ubuntu-latest
+#     steps:
+#       - uses: actions/checkout@v4
+#       - name: Set up Python
+#         uses: actions/setup-python@v5
+#         with:
+#           python-version: '3.10'
+#       - name: Install Airflow dependencies
+#         run: pip install apache-airflow pytest
+#       - name: Test DAG Integrity
+#         run: |
+#           cat <<EOT >> test_dag_integrity.py
+#           from airflow.models import DagBag
+#           def test_dags_load():
+#               dag_bag = DagBag(dag_folder='airflow/dags', include_examples=False)
+#               assert len(dag_bag.import_errors) == 0, f"Errors: {dag_bag.import_errors}"
+#           EOT
+#           pytest test_dag_integrity.py

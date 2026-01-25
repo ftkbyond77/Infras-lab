@@ -7,7 +7,6 @@ from PIL import Image
 from tqdm import tqdm
 import mlflow
 import mlflow.pytorch
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -28,22 +27,25 @@ import torchvision.transforms as transforms
 #     "DEVICE": "cuda" if torch.cuda.is_available() else "cpu"
 # }
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# When running in Docker via Airflow, we mount the volume to /outputs
+BASE_DATA_DIR = os.getenv("BASE_DATA_DIR", "data") 
+OUTPUT_MODEL_DIR = os.getenv("OUTPUT_MODEL_DIR", "saved_models")
 
 CONFIG = {
-    "TRAIN_DIR_A": os.path.join(BASE_DIR, "data/trainA"),
-    "TRAIN_DIR_B": os.path.join(BASE_DIR, "data/trainB"),
+    "TRAIN_DIR_A": os.path.join(BASE_DATA_DIR, "trainA"),
+    "TRAIN_DIR_B": os.path.join(BASE_DATA_DIR, "trainB"),
     "IMG_SIZE": 256,
     "BATCH_SIZE": 1,
     "LR": 2e-4,
-    "EPOCHS": 5,                    # Low for testing,
-    "NUM_WORKERS": 5,
+    "EPOCHS": 5,
+    "NUM_WORKERS": 4,
     "DEVICE": "cuda" if torch.cuda.is_available() else "cpu",
-    "MLFLOW_URI": "http://localhost:5000",
+    "MLFLOW_URI": os.getenv("MLFLOW_URI", "http://localhost:5000"),
     "EXPERIMENT_NAME": "Image-to-Image_CycleGAN"
-
 }
 
+os.makedirs(OUTPUT_MODEL_DIR, exist_ok=True)
 
 # Enable CUDNN Benchmark for optimized performance on fixed input sizes
 if torch.cuda.is_available():
@@ -55,42 +57,29 @@ if torch.cuda.is_available():
 class ImageDataset(Dataset):
     def __init__(self, root_dir, transform=None):
         if not os.path.exists(root_dir):
-            print(f"Warining: {root_dir} not found. Create empty list.")
             self.files = []
         else:
             self.files = sorted(glob.glob(os.path.join(root_dir, "*.jpg")))
         self.transform = transform
 
-    def __len__(self):
+    def __len__(self): 
         return len(self.files)
 
     def __getitem__(self, index):
-        if len(self.files) == 0:
-            return torch.zeros(3, CONFIG["IMG_SIZE"], CONFIG["IMG_SIZE"])
-
-        # Allow wrapping if requested index is out of bounds
-        img_path = self.files[index % len(self.files)]
-        img = Image.open(img_path).convert("RGB")
-        if self.transform:
-            img = self.transform(img)
+        img = Image.open(self.files[index % len(self.files)]).convert("RGB")
+        if self.transform: img = self.transform(img)
         return img
 
 def get_loaders():
     transform = transforms.Compose([
         transforms.Resize((CONFIG["IMG_SIZE"], CONFIG["IMG_SIZE"])),
-        transforms.ToTensor(), # Converts to [0, 1]
-        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)) # Normalize to [-1, 1]
+        transforms.ToTensor(),
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
     ])
-
     ds_A = ImageDataset(CONFIG["TRAIN_DIR_A"], transform=transform)
     ds_B = ImageDataset(CONFIG["TRAIN_DIR_B"], transform=transform)
-
-    # Use pin_memory=True for faster transfer to GPU
-    loader_A = DataLoader(ds_A, batch_size=CONFIG["BATCH_SIZE"], shuffle=True, 
-                          num_workers=CONFIG["NUM_WORKERS"], pin_memory=True)
-    loader_B = DataLoader(ds_B, batch_size=CONFIG["BATCH_SIZE"], shuffle=True, 
-                          num_workers=CONFIG["NUM_WORKERS"], pin_memory=True)
-    
+    loader_A = DataLoader(ds_A, batch_size=CONFIG["BATCH_SIZE"], shuffle=True, num_workers=CONFIG["NUM_WORKERS"], pin_memory=True)
+    loader_B = DataLoader(ds_B, batch_size=CONFIG["BATCH_SIZE"], shuffle=True, num_workers=CONFIG["NUM_WORKERS"], pin_memory=True)
     return loader_A, loader_B
 
 # ------------------------------------------------------------------------------
@@ -231,7 +220,7 @@ class ImagePool:
 # ------------------------------------------------------------------------------
 def train():
     device = CONFIG["DEVICE"]
-    print(f"Training on: {device}")
+    print(f"Training on: {device} | Data: {CONFIG['TRAIN_DIR_A']}")
 
     # --- MLflow Setup ---
     mlflow.set_tracking_uri(CONFIG["MLFLOW_URI"])
@@ -276,7 +265,7 @@ def train():
     # Mixed Precision Scaler (Updated for PyTorch 2.x)
     scaler = torch.amp.GradScaler('cuda')
 
-    print("Starting Model Training with MLflow")
+    print("Starting Training")
     with mlflow.start_run():
         mlflow.log_params(CONFIG)
 
@@ -381,10 +370,13 @@ def train():
         # Create dummy input (Batch size 1, 3 channels, 256x256)
         dummy_input = torch.randn(1, 3, 256, 256, device=device)
         
+        onnx_filename = "cyclegan_candidate.onnx"
+        onnx_path = os.path.join(OUTPUT_MODEL_DIR, onnx_filename)
+
         torch.onnx.export(
             G_AB,
             dummy_input,
-            "cyclegan_horse2zebra.onnx",
+            onnx_path,
             export_params=True,
             opset_version=11,
             do_constant_folding=True,
@@ -392,7 +384,9 @@ def train():
             output_names=['output'],
             dynamic_axes={'input': {0: 'batch_size'}, 'output': {0: 'batch_size'}}
         )
-        print("Export complete: cyclegan_horse2zebra.onnx")
+        print(f"Export complete: {onnx_path}")
+
+        mlflow.log_artifact(onnx_path)
         
 # def export_onnx():
 #     # Configuration

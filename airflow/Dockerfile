@@ -8,7 +8,14 @@ RUN apt-get update && \
     apt-get install -y docker.io && \
     rm -rf /var/lib/apt/lists/*
 
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 USER airflow
 
 # Install Docker Provider
-RUN pip install apache-airflow-providers-docker==4.0.0 apache-airflow-providers-fab
+# RUN pip install apache-airflow-providers-docker==4.0.0 apache-airflow-providers-fab
+
+RUN pip install --no-cache-dir apache-airflow-providers-docker==4.0.0 
+
+ENTRYPOINT ["/entrypoint.sh"]

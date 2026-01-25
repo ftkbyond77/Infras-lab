@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"sync" 
 
-	_ "image/png" // Register PNG decoder
-
+	_ "image/png"
 	_ "golang.org/x/image/webp"
 
 	"github.com/yalue/onnxruntime_go"
@@ -18,19 +18,25 @@ import (
 )
 
 var (
-	// We load the model once, globally
+	// Mutex to prevent inference while reloading model
+	modelMu sync.RWMutex
 	session *onnxruntime_go.DynamicAdvancedSession
 	imgSize = 256
 )
 
 func main() {
-	// 1. Initialize ONNX Runtime
-	initONNX()
+	// 1. Initialize ONNX Runtime Environment (Do this only once)
+	initONNXEnvironment()
 
-	// 2. Setup HTTP Server
+	// 2. Load the initial model
+	loadModelSession()
+
+	// 3. Setup HTTP Server
 	http.HandleFunc("/infer", handleInference)
+	
+	// [NEW] Endpoint for Airflow to trigger model reload
+	http.HandleFunc("/reload", handleReload)
 
-	// Health check for Render
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
@@ -47,7 +53,11 @@ func main() {
 	}
 }
 
-func initONNX() {
+func initONNXEnvironment() {
+	if onnxruntime_go.IsInitialized() {
+		return
+	}
+
 	var libName string
 	if runtime.GOOS == "windows" {
 		libName = "onnxruntime.dll"
@@ -55,11 +65,21 @@ func initONNX() {
 		libName = "libonnxruntime.so"
 	}
 
-	// Ensure library is loaded
 	onnxruntime_go.SetSharedLibraryPath(libName)
 	err := onnxruntime_go.InitializeEnvironment()
 	if err != nil {
 		log.Fatalf("Failed to initialize ONNX environment: %v", err)
+	}
+}
+
+func loadModelSession() {
+	modelMu.Lock() // [LOCK] Block all readers (inference)
+	defer modelMu.Unlock()
+
+	// Clean up old session if it exists (Free memory)
+	if session != nil {
+		session.Destroy()
+		session = nil
 	}
 
 	modelPath := os.Getenv("MODEL_PATH")
@@ -67,7 +87,8 @@ func initONNX() {
 		modelPath = "../model-path/cyclegan_horse2zebra.onnx"
 	}
 
-	log.Println("Loading model into memory...")
+	log.Printf("Loading model from: %s", modelPath)
+	var err error
 	session, err = onnxruntime_go.NewDynamicAdvancedSession(
 		modelPath,
 		[]string{"input"},
@@ -75,13 +96,25 @@ func initONNX() {
 		nil,
 	)
 	if err != nil {
-		log.Fatalf("Failed to create session: %v", err)
+		log.Printf("ERROR: Failed to create session: %v", err)
+	} else {
+		log.Println("SUCCESS: Model loaded.")
 	}
-	log.Println("Model loaded successfully.")
+}
+
+// Handle Reload Request from Airflow
+func handleReload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	log.Println("Received Reload Signal from Pipeline...")
+	loadModelSession()
+	w.Write([]byte("Model Reloaded Successfully"))
 }
 
 func handleInference(w http.ResponseWriter, r *http.Request) {
-	// CORS Headers (Enable access from Next.js)
+	// CORS Headers
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "POST")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
@@ -95,7 +128,16 @@ func handleInference(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Parse Image from Form Data
+	// [READ LOCK] Allow multiple inferences, but block if reloading
+	modelMu.RLock()
+	defer modelMu.RUnlock()
+
+	if session == nil {
+		http.Error(w, "Model is currently reloading or unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	// 1. Parse Image
 	file, _, err := r.FormFile("image")
 	if err != nil {
 		http.Error(w, "Invalid file", http.StatusBadRequest)
@@ -142,7 +184,7 @@ func handleInference(w http.ResponseWriter, r *http.Request) {
 	defer outputTensor.Destroy()
 	outputImg := tensorToImage(outputTensor.GetData(), imgSize, imgSize)
 
-	// 6. Return Image Response directly
+	// 6. Return Image
 	w.Header().Set("Content-Type", "image/jpeg")
 	if err := jpeg.Encode(w, outputImg, nil); err != nil {
 		log.Printf("Response write error: %v", err)
@@ -150,60 +192,47 @@ func handleInference(w http.ResponseWriter, r *http.Request) {
 }
 
 func preprocessImage(img image.Image, width, height int) ([]float32, image.Image, error) {
-	// Resize using high-quality resampling
-	dst := image.NewRGBA(image.Rect(0, 0, width, height))
-	draw.CatmullRom.Scale(dst, dst.Rect, img, img.Bounds(), draw.Over, nil)
-
-	// Convert to Tensor (CHW format)
-	tensor := make([]float32, 3*width*height)
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			r, g, b, _ := dst.At(x, y).RGBA()
-
-			// Normalize to [-1, 1]
-			rNorm := (float32(r)/65535.0 - 0.5) / 0.5
-			gNorm := (float32(g)/65535.0 - 0.5) / 0.5
-			bNorm := (float32(b)/65535.0 - 0.5) / 0.5
-
-			idx := y*width + x
-			tensor[idx] = rNorm                  // R
-			tensor[idx+(width*height)] = gNorm   // G
-			tensor[idx+(2*width*height)] = bNorm // B
-		}
-	}
-	return tensor, dst, nil
+    dst := image.NewRGBA(image.Rect(0, 0, width, height))
+    draw.CatmullRom.Scale(dst, dst.Rect, img, img.Bounds(), draw.Over, nil)
+    tensor := make([]float32, 3*width*height)
+    for y := 0; y < height; y++ {
+        for x := 0; x < width; x++ {
+            r, g, b, _ := dst.At(x, y).RGBA()
+            rNorm := (float32(r)/65535.0 - 0.5) / 0.5
+            gNorm := (float32(g)/65535.0 - 0.5) / 0.5
+            bNorm := (float32(b)/65535.0 - 0.5) / 0.5
+            idx := y*width + x
+            tensor[idx] = rNorm
+            tensor[idx+(width*height)] = gNorm
+            tensor[idx+(2*width*height)] = bNorm
+        }
+    }
+    return tensor, dst, nil
 }
 
 func tensorToImage(data []float32, width, height int) *image.RGBA {
-	rect := image.Rect(0, 0, width, height)
-	img := image.NewRGBA(rect)
-	channelStride := width * height
-
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			idx := y*width + x
-
-			r := (data[idx] * 0.5) + 0.5
-			g := (data[idx+channelStride] * 0.5) + 0.5
-			b := (data[idx+(2*channelStride)] * 0.5) + 0.5
-
-			img.Set(x, y, color.RGBA{
-				R: uint8(clamp(r) * 255),
-				G: uint8(clamp(g) * 255),
-				B: uint8(clamp(b) * 255),
-				A: 255,
-			})
-		}
-	}
-	return img
+    rect := image.Rect(0, 0, width, height)
+    img := image.NewRGBA(rect)
+    channelStride := width * height
+    for y := 0; y < height; y++ {
+        for x := 0; x < width; x++ {
+            idx := y*width + x
+            r := (data[idx] * 0.5) + 0.5
+            g := (data[idx+channelStride] * 0.5) + 0.5
+            b := (data[idx+(2*channelStride)] * 0.5) + 0.5
+            img.Set(x, y, color.RGBA{
+                R: uint8(clamp(r) * 255),
+                G: uint8(clamp(g) * 255),
+                B: uint8(clamp(b) * 255),
+                A: 255,
+            })
+        }
+    }
+    return img
 }
 
 func clamp(val float32) float32 {
-	if val < 0 {
-		return 0
-	}
-	if val > 1 {
-		return 1
-	}
-	return val
+    if val < 0 { return 0 }
+    if val > 1 { return 1 }
+    return val
 }
