@@ -13,6 +13,8 @@ RUN chmod +x /entrypoint.sh
 
 USER airflow
 
+RUN pip install --no-cache-dir --upgrade docker
+
 # Install Docker Provider
 # RUN pip install apache-airflow-providers-docker==4.0.0 apache-airflow-providers-fab
 

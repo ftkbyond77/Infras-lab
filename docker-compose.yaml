@@ -1,40 +1,140 @@
-x-common:
-  &common-env
-  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+x-common-env: &common-env
+  AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+
+  # DB / Broker
   AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
-  AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+  AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+  AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+  AIRFLOW__CELERY__WORKER_CONCURRENCY: 4
+
+  # DAG Serialization (REQUIRED FOR DAG PROCESSOR MODE)
+  AIRFLOW__CORE__STORE_SERIALIZED_DAGS: "true"
+  AIRFLOW__DAG_PROCESSOR__DAG_DIR_LIST_INTERVAL: "0"
+
+  AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+  AIRFLOW__CORE__DEFAULT_TIMEZONE: UTC
+
+  # Logging
+  AIRFLOW__LOGGING__BASE_LOG_FOLDER: /opt/airflow/logs
+  AIRFLOW__LOGGING__REMOTE_LOGGING: "false"
+
+  # API auth - CRITICAL: All secrets must match exactly
   AIRFLOW__CORE__AUTH_MANAGER: airflow.api_fastapi.auth.managers.simple.simple_auth_manager.SimpleAuthManager
-  AIRFLOW__API__SECRET_KEY: ${AIRFLOW_WEB_KEY}
+    
+  # Execution API configuration
+  AIRFLOW__CORE__EXECUTION_API_SERVER_URL: "http://airflow-api-server:8080/execution/"
+  AIRFLOW__CORE__INTERNAL_API_URL: "http://airflow-api-server:8080"
+
   AIRFLOW_VAR_HOST_MODEL_STORE: ${HOST_MODEL_STORE_PATH}
 
-x-airflow-common:
-  &airflow-common
+  AIRFLOW__CORE__FERNET_KEY: "pJ9zXK8Vn1xqL3mW5yR7sT2uB4cD6eF8gH0iJkLmNo=" # openssl rand -base 64
+  
+  # API secret key for log fetching and auth 
+  AIRFLOW__API__SECRET_KEY: "CWvk/9IwMrLnc/c/TA6fxRTQjwBdjLPo2O70QaKxa9W6dWOgG3ZYI97J7pAqWHWc"  # Generate with `openssl rand -base64 48`
+  
+  # JWT secret name 
+  AIRFLOW__API_AUTH__JWT_SECRET: "KKYWBKNATUylSSyk+O+6qob2hZl+c3r1mVN9B7FbWRI="  # openssl rand -base 32
+
+x-airflow-common: &airflow-common
   build: ./airflow
+  user: "${AIRFLOW_UID:-50000}:0"
+  group_add:
+    - "984"
   environment:
     <<: *common-env
   volumes:
     - ./airflow/dags:/opt/airflow/dags
     - ./model_store:/opt/airflow/model_store
+    - ./logs:/opt/airflow/logs
     - /var/run/docker.sock:/var/run/docker.sock
   depends_on:
     postgres:
       condition: service_healthy
+    redis:
+      condition: service_started
+
 
 services:
+
   postgres:
     image: postgres:15
     environment:
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
       interval: 5s
       retries: 5
 
+  redis:
+    image: redis:7
+    restart: always
+
+  # ---------- AIRFLOW INIT ----------
+  airflow-init:
+    <<: *airflow-common
+    command: >
+      bash -c "
+      airflow db migrate &&
+      airflow users create
+        --username admin
+        --password admin
+        --firstname Admin
+        --lastname User
+        --role Admin
+        --email admin@example.com || true
+      "
+
+  # ---------- DAG PROCESSOR (MUST RUN) ----------
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: airflow dag-processor
+    restart: always
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  # ---------- SCHEDULER ----------
+  airflow-scheduler:
+    <<: *airflow-common
+    command: airflow scheduler
+    restart: always
+    depends_on:
+      airflow-dag-processor:
+        condition: service_started
+
+  # ---------- WORKERS ----------
+  airflow-worker:
+    <<: *airflow-common
+    command: airflow celery worker
+    restart: always
+    depends_on:
+      airflow-scheduler:
+        condition: service_started
+      airflow-api-server:
+        condition: service_started
+
+  # ---------- TRIGGERER ----------
+  airflow-triggerer:
+    <<: *airflow-common
+    command: airflow triggerer
+    restart: always
+
+  # ---------- API SERVER (UI) ----------
+  airflow-api-server:
+    <<: *airflow-common
+    command: airflow api-server
+    restart: always
+    ports:
+      - "8080:8080"
+    depends_on:
+      airflow-scheduler:
+        condition: service_started
+
+  # ---------- MLFLOW ----------
   mlflow:
     build:
       context: .
@@ -52,69 +152,20 @@ services:
     volumes:
       - ./model_store:/mlflow/artifacts
 
-  airflow-init:
-    <<: *airflow-common
-    command: >
-      bash -c "
-      airflow db migrate &&
-      airflow users create
-        --username admin
-        --password admin
-        --firstname Admin
-        --lastname User
-        --role Admin
-        --email admin@example.com || true
-      "
-
-  airflow-dag-processor:
-    <<: *airflow-common
-    command: airflow dag-processor
-    restart: always
-    depends_on:
-      airflow-init:
-        condition: service_completed_successfully
-
-
-  airflow-api-server:
-    <<: *airflow-common
-    command: airflow api-server
-    restart: always
-    ports:
-      - "8080:8080"
-    depends_on:
-      airflow-init:
-        condition: service_completed_successfully
-
-  airflow-scheduler:
-    <<: *airflow-common
-    command: airflow scheduler
-    restart: always
-    depends_on:
-      airflow-init:
-        condition: service_completed_successfully
-
-  airflow-triggerer:
-    <<: *airflow-common
-    command: airflow triggerer
-    restart: always
-    depends_on:
-      airflow-init:
-        condition: service_completed_successfully
-
+  # ---------- INFERENCE ----------
   inference:
     build: ./inferences
+    container_name: inference
     restart: always
-    container_name: inference 
     environment:
-      - MODEL_PATH=/models/latest/cyclegan.onnx
-      - PORT=8080
+      MODEL_PATH: /models/latest/cyclegan.onnx
+      PORT: 8080
     volumes:
       - ./model_store/latest:/models/latest
     ports:
       - "8081:8080"
-    depends_on:
-      - airflow-api-server
 
+  # ---------- FRONTEND ----------
   frontend:
     build:
       context: ./frontend
@@ -123,6 +174,7 @@ services:
     ports:
       - "3000:3000"
     restart: on-failure
+
 
 volumes:
   postgres_data:
