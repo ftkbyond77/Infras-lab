@@ -7,8 +7,14 @@ from airflow.providers.standard.operators.bash import BashOperator
 # from airflow.operators.bash import BashOperator
 from airflow.providers.http.operators.http import HttpOperator
 from datetime import datetime, timezone
+
 import os
 import shutil
+from pathlib import Path
+import logging
+import time
+
+logger = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------------------------
@@ -32,11 +38,38 @@ default_args = {
 # DAG 1: DATA PIPELINE
 # ------------------------------------------------------------------------------
 def _preprocess_data(**kwargs):
-    # Simple simulation: Copy raw to processed (Real world: Resize, Normalization)
-    if os.path.exists(PROCESSED_PATH):
-        shutil.rmtree(PROCESSED_PATH)
-    shutil.copytree(RAW_PATH, PROCESSED_PATH)
+    processed_path = Path(PROCESSED_PATH)
+    raw_path = Path(RAW_PATH)
+    
+    logger.info(f"Starting preprocessing: raw={raw_path}, processed={processed_path}")
+
+    if processed_path.exists():
+        logger.info("Clearing existing processed directory contents.")
+        for item in list(processed_path.iterdir()):
+            try:
+                if item.is_dir():
+                    shutil.rmtree(item, ignore_errors=True)
+                else:
+                    item.unlink(missing_ok=True)
+            except Exception as e:
+                logger.warning(f"Failed to remove {item}: {e}")
+    
+    processed_path.mkdir(parents=True, exist_ok=True)
+
+    # Small Retry if copy fails due to race
+    for attempt in range(3):
+        try:
+            shutil.copytree(raw_path, processed_path, dirs_exist_ok=True)
+            logger.info(f"Successfully copied data from {raw_path} to {processed_path}")
+            break
+        except Exception as e:
+            logger.warning(f"Copy attempt {attempt+1} failed: {e}")
+            if attempt == 2:
+                raise
+            time.sleep(1)
+
     print(f"Data processed from {RAW_PATH} to {PROCESSED_PATH}")
+
 
 with DAG('01_data_pipeline', default_args=default_args, schedule='@daily', catchup=False) as dag_data:
     preprocess_task = PythonOperator(
