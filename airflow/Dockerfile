@@ -19,6 +19,7 @@ RUN pip install --no-cache-dir --upgrade docker
 # RUN pip install apache-airflow-providers-docker==4.0.0 apache-airflow-providers-fab
 
 RUN pip install --no-cache-dir apache-airflow-providers-docker==4.0.0 
-RUN pip install apache-airflow-providers-http
+# RUN pip install apache-airflow-providers-http
 
-ENTRYPOINT ["/entrypoint.sh"]
+# ENTRYPOINT ["/usr/bin/dumb-init", "--"]
+CMD ["/entrypoint.sh"]

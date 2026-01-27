@@ -206,3 +206,11 @@ sleep 10 (wait for database wake up)
 chmod +x start.sh
 ./start.sh
 ```
+
+Reset Permission
+```
+sudo chown -R $USER:$USER model_store
+sudo chown -R $USER:$USER logs
+sudo chown -R $USER:$USER airflow
+
+```

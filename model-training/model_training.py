@@ -27,6 +27,8 @@ import torchvision.transforms as transforms
 #     "DEVICE": "cuda" if torch.cuda.is_available() else "cpu"
 # }
 
+print("CUDA Available:", torch.cuda.is_available())
+print("GPU count:", torch.cuda.device_count())
 
 # When running in Docker via Airflow, we mount the volume to /outputs
 BASE_DATA_DIR = os.getenv("BASE_DATA_DIR", "data") 

@@ -1,11 +1,12 @@
 from airflow import DAG
 from airflow.providers.docker.operators.docker import DockerOperator
-from docker.types import Mount
+from docker.types import Mount, DeviceRequest
 # from airflow.operators.python import PythonOperator, BranchPythonOperator
 from airflow.providers.standard.operators.python import PythonOperator, BranchPythonOperator
 from airflow.providers.standard.operators.bash import BashOperator
 # from airflow.operators.bash import BashOperator
 from airflow.providers.http.operators.http import HttpOperator
+from airflow.sdk.bases.hook import BaseHook
 from datetime import datetime, timezone
 
 import os
@@ -59,7 +60,7 @@ def _preprocess_data(**kwargs):
     # Small Retry if copy fails due to race
     for attempt in range(3):
         try:
-            shutil.copytree(raw_path, processed_path, dirs_exist_ok=True)
+            shutil.copytree(raw_path, processed_path, copy_function=shutil.copy, dirs_exist_ok=True)
             logger.info(f"Successfully copied data from {raw_path} to {processed_path}")
             break
         except Exception as e:
@@ -86,12 +87,17 @@ with DAG('02_training_pipeline', default_args=default_args, schedule=None, catch
     # Runs the training script inside the PyTorch container
     train_model = DockerOperator(
         task_id='train_model_container',
-        image='infras-lab-inference:latest', 
+        image='infras-lab-training:latest', 
         api_version='auto',
         auto_remove="success",
         network_mode='infras-lab_default', # Must match docker-compose network name
         docker_url='unix://var/run/docker.sock',
         command='python model_training.py',
+
+        device_requests=[
+            DeviceRequest(count=-1, capabilities=[['gpu']])
+        ],
+
         environment={
             'MLFLOW_URI': 'http://mlflow:5000',
             # Map internal paths to where we mounted the volume below
@@ -104,7 +110,9 @@ with DAG('02_training_pipeline', default_args=default_args, schedule=None, catch
                 target='/outputs',          # container path
                 type='bind'
             )
-        ]
+        ],
+        mount_tmp_dir=False, # disable temp mount
+        force_pull=False,
     )
 
 

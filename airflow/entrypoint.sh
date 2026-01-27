@@ -1,8 +1,9 @@
 #!/bin/bash
 #!/bin/bash
 set -e
-airflow db migrate
+airflow db migrate || true
 exec "$@"
+# exec /entrypoint "$@"
 
 
 # --- Password ---

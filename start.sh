@@ -1,6 +1,15 @@
 #!/bin/bash
 set -e
 
+
+# Data Folder Permission
+# sudo chown -R $USER:$USER model_store
+
+# # Run on Host
+# sudo chown -R 50000:0 model_store
+# sudo chmod -R 775 model_store
+
+
 # ==============================================================================
 # 0. LOGGING & CONFIGURATION
 # ==============================================================================
@@ -93,8 +102,18 @@ chmod -R 777 airflow/dags
 # 3. BUILD PHASE
 # ==============================================================================
 echo -e "${BLUE} Building Docker Images (No Cache)...${NC}"
-# --no-cache ensures we pick up the latest code changes in Python and Go
+
+# Build all services defined in docker-compose.yaml (Airflow, MLflow, Inference, Frontend)
 docker compose build --no-cache
+
+# Build separate training image for DockerOperator in DAG (Python/PyTorch env)
+echo -e "${BLUE} Building training image for model_training.py...${NC}"
+docker build --no-cache \
+  -t infras-lab-training:latest \
+  -f ./model-training/Dockerfile \
+  ./model-training
+
+echo -e "${GREEN} All images built successfully!${NC}"
 
 # ==============================================================================
 # 4. SERVICE ORCHESTRATION (Startup Sequence)
